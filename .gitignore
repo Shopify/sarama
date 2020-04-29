@@ -25,3 +25,7 @@ _testmain.go
 
 coverage.txt
 profile.out
+/.idea
+*.diff
+*.iml
+
