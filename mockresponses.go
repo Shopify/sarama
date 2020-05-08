@@ -853,6 +853,31 @@ func (mr *MockDescribeConfigsResponse) For(reqBody versionedDecoder) encoderWith
 	return res
 }
 
+type MockDescribeConfigsResponseWithErrorCode struct {
+	t TestReporter
+}
+
+func NewMockDescribeConfigsResponseWithErrorCode(t TestReporter) *MockDescribeConfigsResponseWithErrorCode {
+	return &MockDescribeConfigsResponseWithErrorCode{t: t}
+}
+
+func (mr *MockDescribeConfigsResponseWithErrorCode) For(reqBody versionedDecoder) encoderWithHeader {
+	req := reqBody.(*DescribeConfigsRequest)
+	res := &DescribeConfigsResponse{
+		Version: req.Version,
+	}
+
+	for _, r := range req.Resources {
+		res.Resources = append(res.Resources, &ResourceResponse{
+			Name:      r.Name,
+			Type:      r.Type,
+			ErrorCode: 83,
+			ErrorMsg:  "",
+		})
+	}
+	return res
+}
+
 type MockAlterConfigsResponse struct {
 	t TestReporter
 }
@@ -869,6 +894,29 @@ func (mr *MockAlterConfigsResponse) For(reqBody versionedDecoder) encoderWithHea
 		res.Resources = append(res.Resources, &AlterConfigsResourceResponse{Name: r.Name,
 			Type:     r.Type,
 			ErrorMsg: "",
+		})
+	}
+	return res
+}
+
+type MockAlterConfigsResponseWithErrorCode struct {
+	t TestReporter
+}
+
+func NewMockAlterConfigsResponseWithErrorCode(t TestReporter) *MockAlterConfigsResponseWithErrorCode {
+	return &MockAlterConfigsResponseWithErrorCode{t: t}
+}
+
+func (mr *MockAlterConfigsResponseWithErrorCode) For(reqBody versionedDecoder) encoderWithHeader {
+	req := reqBody.(*AlterConfigsRequest)
+	res := &AlterConfigsResponse{}
+
+	for _, r := range req.Resources {
+		res.Resources = append(res.Resources, &AlterConfigsResourceResponse{
+			Name:      r.Name,
+			Type:      r.Type,
+			ErrorCode: 83,
+			ErrorMsg:  "",
 		})
 	}
 	return res
@@ -1026,6 +1074,48 @@ func (m *MockDeleteGroupsResponse) For(reqBody versionedDecoder) encoderWithHead
 	}
 	for _, group := range m.deletedGroups {
 		resp.GroupErrorCodes[group] = ErrNoError
+	}
+	return resp
+}
+
+type MockDescribeLogDirsResponse struct {
+	t       TestReporter
+	logDirs []DescribeLogDirsResponseDirMetadata
+}
+
+func NewMockDescribeLogDirsResponse(t TestReporter) *MockDescribeLogDirsResponse {
+	return &MockDescribeLogDirsResponse{t: t}
+}
+
+func (m *MockDescribeLogDirsResponse) SetLogDirs(logDirPath string, topicPartitions map[string]int) *MockDescribeLogDirsResponse {
+	topics := []DescribeLogDirsResponseTopic{}
+	for topic := range topicPartitions {
+		partitions := []DescribeLogDirsResponsePartition{}
+		for i := 0; i < topicPartitions[topic]; i++ {
+			partitions = append(partitions, DescribeLogDirsResponsePartition{
+				PartitionID: int32(i),
+				IsTemporary: false,
+				OffsetLag:   int64(0),
+				Size:        int64(1234),
+			})
+		}
+		topics = append(topics, DescribeLogDirsResponseTopic{
+			Topic:      topic,
+			Partitions: partitions,
+		})
+	}
+	logDir := DescribeLogDirsResponseDirMetadata{
+		ErrorCode: ErrNoError,
+		Path:      logDirPath,
+		Topics:    topics,
+	}
+	m.logDirs = []DescribeLogDirsResponseDirMetadata{logDir}
+	return m
+}
+
+func (m *MockDescribeLogDirsResponse) For(reqBody versionedDecoder) encoderWithHeader {
+	resp := &DescribeLogDirsResponse{
+		LogDirs: m.logDirs,
 	}
 	return resp
 }
