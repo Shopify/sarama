@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	metrics "github.com/rcrowley/go-metrics"
+	"github.com/rcrowley/go-metrics"
 )
 
 // Broker represents a single Kafka broker connection. All operations on this object are entirely concurrency-safe.
@@ -154,27 +154,19 @@ func (b *Broker) Open(conf *Config) error {
 	go withRecover(func() {
 		defer b.lock.Unlock()
 
-		dialer := net.Dialer{
-			Timeout:   conf.Net.DialTimeout,
-			KeepAlive: conf.Net.KeepAlive,
-			LocalAddr: conf.Net.LocalAddr,
-		}
-
-		if conf.Net.TLS.Enable {
-			b.conn, b.connErr = tls.DialWithDialer(&dialer, "tcp", b.addr, conf.Net.TLS.Config)
-		} else if conf.Net.Proxy.Enable {
-			b.conn, b.connErr = conf.Net.Proxy.Dialer.Dial("tcp", b.addr)
-		} else {
-			b.conn, b.connErr = dialer.Dial("tcp", b.addr)
-		}
+		dialer := conf.getDialer()
+		b.conn, b.connErr = dialer.Dial("tcp", b.addr)
 		if b.connErr != nil {
 			Logger.Printf("Failed to connect to broker %s: %s\n", b.addr, b.connErr)
 			b.conn = nil
 			atomic.StoreInt32(&b.opened, 0)
 			return
 		}
-		b.conn = newBufConn(b.conn)
+		if conf.Net.TLS.Enable {
+			b.conn = tls.Client(b.conn, validServerNameTLS(b.addr, conf.Net.TLS.Config))
+		}
 
+		b.conn = newBufConn(b.conn)
 		b.conf = conf
 
 		// Create or reuse the global metrics shared between brokers
@@ -1035,7 +1027,7 @@ func (b *Broker) sendAndReceiveV0SASLPlainAuth() error {
 	length := len(b.conf.Net.SASL.AuthIdentity) + 1 + len(b.conf.Net.SASL.User) + 1 + len(b.conf.Net.SASL.Password)
 	authBytes := make([]byte, length+4) //4 byte length header + auth data
 	binary.BigEndian.PutUint32(authBytes, uint32(length))
-	copy(authBytes[4:], []byte(b.conf.Net.SASL.AuthIdentity+"\x00"+b.conf.Net.SASL.User+"\x00"+b.conf.Net.SASL.Password))
+	copy(authBytes[4:], b.conf.Net.SASL.AuthIdentity+"\x00"+b.conf.Net.SASL.User+"\x00"+b.conf.Net.SASL.Password)
 
 	requestTime := time.Now()
 	// Will be decremented in updateIncomingCommunicationMetrics (except error)
@@ -1429,4 +1421,21 @@ func (b *Broker) registerCounter(name string) metrics.Counter {
 	nameForBroker := getMetricNameForBroker(name, b)
 	b.registeredMetrics = append(b.registeredMetrics, nameForBroker)
 	return metrics.GetOrRegisterCounter(nameForBroker, b.conf.MetricRegistry)
+}
+
+func validServerNameTLS(addr string, cfg *tls.Config) *tls.Config {
+	if cfg == nil {
+		cfg = &tls.Config{}
+	}
+	if cfg.ServerName != "" {
+		return cfg
+	}
+
+	c := cfg.Clone()
+	sn, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		Logger.Println(fmt.Errorf("failed to get ServerName from addr %w", err))
+	}
+	c.ServerName = sn
+	return c
 }

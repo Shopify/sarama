@@ -1,3 +1,5 @@
+//+build functional
+
 package sarama
 
 import (
@@ -16,7 +18,7 @@ func TestFuncConsumerOffsetOutOfRange(t *testing.T) {
 	setupFunctionalTest(t)
 	defer teardownFunctionalTest(t)
 
-	consumer, err := NewConsumer(kafkaBrokers, nil)
+	consumer, err := NewConsumer(FunctionalTestEnv.KafkaBrokerAddrs, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +38,7 @@ func TestConsumerHighWaterMarkOffset(t *testing.T) {
 	setupFunctionalTest(t)
 	defer teardownFunctionalTest(t)
 
-	p, err := NewSyncProducer(kafkaBrokers, nil)
+	p, err := NewSyncProducer(FunctionalTestEnv.KafkaBrokerAddrs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,7 @@ func TestConsumerHighWaterMarkOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err := NewConsumer(kafkaBrokers, nil)
+	c, err := NewConsumer(FunctionalTestEnv.KafkaBrokerAddrs, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +141,11 @@ func TestReadOnlyAndAllCommittedMessages(t *testing.T) {
 	setupFunctionalTest(t)
 	defer teardownFunctionalTest(t)
 
-	config := NewConfig()
+	config := NewTestConfig()
 	config.Consumer.IsolationLevel = ReadCommitted
 	config.Version = V0_11_0_0
 
-	consumer, err := NewConsumer(kafkaBrokers, config)
+	consumer, err := NewConsumer(FunctionalTestEnv.KafkaBrokerAddrs, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +195,7 @@ func produceMsgs(t *testing.T, clientVersions []KafkaVersion, codecs []Compressi
 	var producedMessages []*ProducerMessage
 	for _, prodVer := range clientVersions {
 		for _, codec := range codecs {
-			prodCfg := NewConfig()
+			prodCfg := NewTestConfig()
 			prodCfg.Version = prodVer
 			prodCfg.Producer.Return.Successes = true
 			prodCfg.Producer.Return.Errors = true
@@ -205,7 +207,7 @@ func produceMsgs(t *testing.T, clientVersions []KafkaVersion, codecs []Compressi
 				prodCfg.Net.MaxOpenRequests = 1
 			}
 
-			p, err := NewSyncProducer(kafkaBrokers, prodCfg)
+			p, err := NewSyncProducer(FunctionalTestEnv.KafkaBrokerAddrs, prodCfg)
 			if err != nil {
 				t.Errorf("Failed to create producer: version=%s, compression=%s, err=%v", prodVer, codec, err)
 				continue
@@ -244,42 +246,41 @@ func produceMsgs(t *testing.T, clientVersions []KafkaVersion, codecs []Compressi
 func consumeMsgs(t *testing.T, clientVersions []KafkaVersion, producedMessages []*ProducerMessage) {
 	// Consume all produced messages with all client versions supported by the
 	// cluster.
-consumerVersionLoop:
 	for _, consVer := range clientVersions {
-		t.Logf("*** Consuming with client version %s\n", consVer)
-		// Create a partition consumer that should start from the first produced
-		// message.
-		consCfg := NewConfig()
-		consCfg.Version = consVer
-		c, err := NewConsumer(kafkaBrokers, consCfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer safeClose(t, c)
-		pc, err := c.ConsumePartition("test.1", 0, producedMessages[0].Offset)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer safeClose(t, pc)
-
-		// Consume as many messages as there have been produced and make sure that
-		// order is preserved.
-		for i, prodMsg := range producedMessages {
-			select {
-			case consMsg := <-pc.Messages():
-				if consMsg.Offset != prodMsg.Offset {
-					t.Errorf("Consumed unexpected offset: version=%s, index=%d, want=%s, got=%s",
-						consVer, i, prodMsg2Str(prodMsg), consMsg2Str(consMsg))
-					continue consumerVersionLoop
-				}
-				if string(consMsg.Value) != string(prodMsg.Value.(StringEncoder)) {
-					t.Errorf("Consumed unexpected msg: version=%s, index=%d, want=%s, got=%s",
-						consVer, i, prodMsg2Str(prodMsg), consMsg2Str(consMsg))
-					continue consumerVersionLoop
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatalf("Timeout waiting for: index=%d, offset=%d, msg=%s", i, prodMsg.Offset, prodMsg.Value)
+		t.Run(consVer.String(), func(t *testing.T) {
+			t.Logf("*** Consuming with client version %s\n", consVer)
+			// Create a partition consumer that should start from the first produced
+			// message.
+			consCfg := NewTestConfig()
+			consCfg.Version = consVer
+			c, err := NewConsumer(FunctionalTestEnv.KafkaBrokerAddrs, consCfg)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
+			defer safeClose(t, c)
+			pc, err := c.ConsumePartition("test.1", 0, producedMessages[0].Offset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer safeClose(t, pc)
+
+			// Consume as many messages as there have been produced and make sure that
+			// order is preserved.
+			for i, prodMsg := range producedMessages {
+				select {
+				case consMsg := <-pc.Messages():
+					if consMsg.Offset != prodMsg.Offset {
+						t.Fatalf("Consumed unexpected offset: version=%s, index=%d, want=%s, got=%s",
+							consVer, i, prodMsg2Str(prodMsg), consMsg2Str(consMsg))
+					}
+					if string(consMsg.Value) != string(prodMsg.Value.(StringEncoder)) {
+						t.Fatalf("Consumed unexpected msg: version=%s, index=%d, want=%s, got=%s",
+							consVer, i, prodMsg2Str(prodMsg), consMsg2Str(consMsg))
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatalf("Timeout waiting for: index=%d, offset=%d, msg=%s", i, prodMsg.Offset, prodMsg.Value)
+				}
+			}
+		})
 	}
 }

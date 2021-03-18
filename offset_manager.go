@@ -19,6 +19,10 @@ type OffsetManager interface {
 	// will otherwise leak memory. You must call this after all the
 	// PartitionOffsetManagers are closed.
 	Close() error
+
+	// Commit commits the offsets. This method can be used if AutoCommit.Enable is
+	// set to false.
+	Commit()
 }
 
 type offsetManager struct {
@@ -58,7 +62,6 @@ func newOffsetManagerFromClient(group, memberID string, generation int32, client
 		client: client,
 		conf:   conf,
 		group:  group,
-		ticker: time.NewTicker(conf.Consumer.Offsets.AutoCommit.Interval),
 		poms:   make(map[string]map[int32]*partitionOffsetManager),
 
 		memberID:   memberID,
@@ -67,7 +70,10 @@ func newOffsetManagerFromClient(group, memberID string, generation int32, client
 		closing: make(chan none),
 		closed:  make(chan none),
 	}
-	go withRecover(om.mainLoop)
+	if conf.Consumer.Offsets.AutoCommit.Enable {
+		om.ticker = time.NewTicker(conf.Consumer.Offsets.AutoCommit.Interval)
+		go withRecover(om.mainLoop)
+	}
 
 	return om, nil
 }
@@ -99,16 +105,20 @@ func (om *offsetManager) Close() error {
 	om.closeOnce.Do(func() {
 		// exit the mainLoop
 		close(om.closing)
-		<-om.closed
+		if om.conf.Consumer.Offsets.AutoCommit.Enable {
+			<-om.closed
+		}
 
 		// mark all POMs as closed
 		om.asyncClosePOMs()
 
 		// flush one last time
-		for attempt := 0; attempt <= om.conf.Consumer.Offsets.Retry.Max; attempt++ {
-			om.flushToBroker()
-			if om.releasePOMs(false) == 0 {
-				break
+		if om.conf.Consumer.Offsets.AutoCommit.Enable {
+			for attempt := 0; attempt <= om.conf.Consumer.Offsets.Retry.Max; attempt++ {
+				om.flushToBroker()
+				if om.releasePOMs(false) == 0 {
+					break
+				}
 			}
 		}
 
@@ -225,20 +235,19 @@ func (om *offsetManager) mainLoop() {
 	for {
 		select {
 		case <-om.ticker.C:
-			om.flushToBroker()
-			om.releasePOMs(false)
+			om.Commit()
 		case <-om.closing:
 			return
 		}
 	}
 }
 
-// flushToBroker is ignored if auto-commit offsets is disabled
-func (om *offsetManager) flushToBroker() {
-	if !om.conf.Consumer.Offsets.AutoCommit.Enable {
-		return
-	}
+func (om *offsetManager) Commit() {
+	om.flushToBroker()
+	om.releasePOMs(false)
+}
 
+func (om *offsetManager) flushToBroker() {
 	req := om.constructRequest()
 	if req == nil {
 		return

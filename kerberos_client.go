@@ -1,10 +1,10 @@
 package sarama
 
 import (
-	krb5client "gopkg.in/jcmturner/gokrb5.v7/client"
-	krb5config "gopkg.in/jcmturner/gokrb5.v7/config"
-	"gopkg.in/jcmturner/gokrb5.v7/keytab"
-	"gopkg.in/jcmturner/gokrb5.v7/types"
+	krb5client "github.com/jcmturner/gokrb5/v8/client"
+	krb5config "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/keytab"
+	"github.com/jcmturner/gokrb5/v8/types"
 )
 
 type KerberosGoKrb5Client struct {
@@ -19,14 +19,9 @@ func (c *KerberosGoKrb5Client) CName() types.PrincipalName {
 	return c.Credentials.CName()
 }
 
-/*
-*
-* Create kerberos client used to obtain TGT and TGS tokens
-* used gokrb5 library, which is a pure go kerberos client with
-* some GSS-API capabilities, and SPNEGO support. Kafka does not use SPNEGO
-* it uses pure Kerberos 5 solution (RFC-4121 and RFC-4120).
-*
- */
+// NewKerberosClient creates kerberos client used to obtain TGT and TGS tokens.
+// It uses pure go Kerberos 5 solution (RFC-4121 and RFC-4120).
+// uses gokrb5 library underlying which is a pure go kerberos client with some GSS-API capabilities.
 func NewKerberosClient(config *GSSAPIConfig) (KerberosClient, error) {
 	cfg, err := krb5config.Load(config.KerberosConfigPath)
 	if err != nil {
@@ -42,10 +37,10 @@ func createClient(config *GSSAPIConfig, cfg *krb5config.Config) (KerberosClient,
 		if err != nil {
 			return nil, err
 		}
-		client = krb5client.NewClientWithKeytab(config.Username, config.Realm, kt, cfg)
+		client = krb5client.NewWithKeytab(config.Username, config.Realm, kt, cfg, krb5client.DisablePAFXFAST(config.DisablePAFXFAST))
 	} else {
-		client = krb5client.NewClientWithPassword(config.Username,
-			config.Realm, config.Password, cfg)
+		client = krb5client.NewWithPassword(config.Username,
+			config.Realm, config.Password, cfg, krb5client.DisablePAFXFAST(config.DisablePAFXFAST))
 	}
 	return &KerberosGoKrb5Client{*client}, nil
 }

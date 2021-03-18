@@ -2,6 +2,113 @@
 
 #### Unreleased
 
+#### Version 1.28.0 (2021-02-15)
+
+**Note that with this release we change `RoundRobinBalancer` strategy to match Java client behavior. See #1788 for details.**
+
+- #1870 - @kvch - Update Kerberos library to latest major
+- #1876 - @bai - Update docs, reference pkg.go.dev
+- #1846 - @wclaeys - Do not ignore Consumer.Offsets.AutoCommit.Enable config on Close
+- #1747 - @XSAM - fix: mock sync producer does not handle the offset while sending messages
+- #1863 - @bai - Add support for Kafka 2.7.0 + update lz4 and klauspost/compress dependencies
+- #1788 - @kzinglzy - feat[balance_strategy]: announcing a new round robin balance strategy
+- #1862 - @bai - Fix CI setenv permissions issues
+- #1832 - @ilyakaznacheev - Update Godoc link to pkg.go.dev
+- #1822 - @danp - KIP-392: Allow consumers to fetch from closest replica
+
+#### Version 1.27.2 (2020-10-21)
+
+# Improvements
+
+#1750 - @krantideep95 Adds missing mock responses for mocking consumer group
+
+# Fixes
+
+#1817 - reverts #1785 - Add private method to Client interface to prevent implementation
+
+#### Version 1.27.1 (2020-10-07)
+
+# Improvements
+
+#1775 - @d1egoaz - Adds a Producer Interceptor example
+#1781 - @justin-chen - Refresh brokers given list of seed brokers
+#1784 - @justin-chen - Add randomize seed broker method
+#1790 - @d1egoaz - remove example binary
+#1798 - @bai - Test against Go 1.15
+#1785 - @justin-chen - Add private method to Client interface to prevent implementation
+#1802 - @uvw - Support Go 1.13 error unwrapping
+
+# Fixes
+
+#1791 - @stanislavkozlovski - bump default version to 1.0.0
+
+#### Version 1.27.0 (2020-08-11)
+
+# Improvements
+
+#1466 - @rubenvp8510  - Expose kerberos fast negotiation configuration
+#1695 - @KJTsanaktsidis - Use docker-compose to run the functional tests
+#1699 - @wclaeys  - Consumer group support for manually comitting offsets
+#1714 - @bai - Bump Go to version 1.14.3, golangci-lint to 1.27.0
+#1726 - @d1egoaz - Include zstd on the functional tests
+#1730 - @d1egoaz - KIP-42 Add producer and consumer interceptors
+#1738 - @varun06 - fixed variable names that are named same as some std lib package names
+#1741 - @varun06 - updated zstd dependency to latest v1.10.10
+#1743 - @varun06 - Fixed declaration dependencies and other lint issues in code base
+#1763 - @alrs - remove deprecated tls options from test
+#1769 - @bai - Add support for Kafka 2.6.0
+
+# Fixes
+
+#1697 - @kvch - Use gofork for encoding/asn1 to fix ASN errors during Kerberos authentication
+#1744 - @alrs  - Fix isBalanced Function Signature
+
+#### Version 1.26.4 (2020-05-19)
+
+# Fixes
+
+- #1701 - @d1egoaz - Set server name only for the current broker
+- #1694 - @dnwe - testfix: set KAFKA_HEAP_OPTS for zk and kafka
+
+#### Version 1.26.3 (2020-05-07)
+
+# Fixes
+
+- #1692 - @d1egoaz - Set tls ServerName to fix issue: either ServerName or InsecureSkipVerify must be specified in the tls.Config
+
+#### Version 1.26.2 (2020-05-06)
+
+# ⚠️ Known Issues
+
+This release has been marked as not ready for production and may be unstable, please use v1.26.4.
+
+# Improvements
+
+- #1560 - @iyacontrol - add sync pool for gzip 1-9
+- #1605 - @dnwe - feat: protocol support for V11 fetch w/ rackID
+- #1617 - @sladkoff / @dwi-di / @random-dwi - Add support for alter/list partition reassignements APIs
+- #1632 - @bai - Add support for Go 1.14
+- #1640 - @random-dwi - Feature/fix list partition reassignments
+- #1646 - @mimaison - Add DescribeLogDirs to admin client
+- #1667 - @bai - Add support for kafka 2.5.0
+
+# Fixes
+
+- #1594 - @sladkoff - Sets ConfigEntry.Default flag in addition to the ConfigEntry.Source for Kafka versions > V1_1_0_0
+- #1601 - @alrs - fix: remove use of testing.T.FailNow() inside goroutine
+- #1602 - @d1egoaz - adds a note about consumer groups Consume method
+- #1607 - @darklore - Fix memory leak when Broker.Open and Broker.Close called repeatedly
+- #1613 - @wblakecaldwell - Updated "retrying" log message when BackoffFunc implemented
+- #1614 - @alrs - produce_response.go: Remove Unused Functions
+- #1619 - @alrs - tools/kafka-producer-performance: prune unused flag variables
+- #1639 - @agriffaut - Handle errors with no message but error code
+- #1643 - @kzinglzy - fix `config.net.keepalive`
+- #1644 - @KJTsanaktsidis - Fix brokers continually allocating new Session IDs
+- #1645 - @Stephan14 - Remove broker(s) which no longer exist in metadata
+- #1650 - @lavoiesl - Return the response error in heartbeatLoop
+- #1661 - @KJTsanaktsidis - Fix "broker received out of order sequence" when brokers die
+- #1666 - @KevinJCross - Bugfix: Allow TLS connections to work over socks proxy.
+
 #### Version 1.26.1 (2020-02-04)
 
 Improvements:

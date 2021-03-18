@@ -101,6 +101,9 @@ type ClusterAdmin interface {
 	// Get information about the nodes in the cluster
 	DescribeCluster() (brokers []*Broker, controllerID int32, err error)
 
+	// Get information about all log directories on the given set of brokers
+	DescribeLogDirs(brokers []int32) (map[int32][]DescribeLogDirsResponseDirMetadata, error)
+
 	// Close shuts down the admin and closes underlying client.
 	Close() error
 }
@@ -546,11 +549,7 @@ func (ca *clusterAdmin) DeleteRecords(topic string, partitionOffsets map[int32]i
 		if err != nil {
 			return err
 		}
-		if _, ok := partitionPerBroker[broker]; ok {
-			partitionPerBroker[broker] = append(partitionPerBroker[broker], partition)
-		} else {
-			partitionPerBroker[broker] = []int32{partition}
-		}
+		partitionPerBroker[broker] = append(partitionPerBroker[broker], partition)
 	}
 	errs := make([]error, 0)
 	for broker, partitions := range partitionPerBroker {
@@ -640,6 +639,9 @@ func (ca *clusterAdmin) DescribeConfig(resource ConfigResource) ([]ConfigEntry, 
 			if rspResource.ErrorMsg != "" {
 				return nil, errors.New(rspResource.ErrorMsg)
 			}
+			if rspResource.ErrorCode != 0 {
+				return nil, KError(rspResource.ErrorCode)
+			}
 			for _, cfgEntry := range rspResource.Configs {
 				entries = append(entries, *cfgEntry)
 			}
@@ -687,6 +689,9 @@ func (ca *clusterAdmin) AlterConfig(resourceType ConfigResourceType, name string
 		if rspResource.Name == name {
 			if rspResource.ErrorMsg != "" {
 				return errors.New(rspResource.ErrorMsg)
+			}
+			if rspResource.ErrorCode != 0 {
+				return KError(rspResource.ErrorCode)
 			}
 		}
 	}
@@ -793,7 +798,7 @@ func (ca *clusterAdmin) ListConsumerGroups() (allGroups map[string]string, err e
 	// Query brokers in parallel, since we have to query *all* brokers
 	brokers := ca.client.Brokers()
 	groupMaps := make(chan map[string]string, len(brokers))
-	errors := make(chan error, len(brokers))
+	errChan := make(chan error, len(brokers))
 	wg := sync.WaitGroup{}
 
 	for _, b := range brokers {
@@ -804,7 +809,7 @@ func (ca *clusterAdmin) ListConsumerGroups() (allGroups map[string]string, err e
 
 			response, err := b.ListGroups(&ListGroupsRequest{})
 			if err != nil {
-				errors <- err
+				errChan <- err
 				return
 			}
 
@@ -819,7 +824,7 @@ func (ca *clusterAdmin) ListConsumerGroups() (allGroups map[string]string, err e
 
 	wg.Wait()
 	close(groupMaps)
-	close(errors)
+	close(errChan)
 
 	for groupMap := range groupMaps {
 		for group, protocolType := range groupMap {
@@ -828,7 +833,7 @@ func (ca *clusterAdmin) ListConsumerGroups() (allGroups map[string]string, err e
 	}
 
 	// Intentionally return only the first error for simplicity
-	err = <-errors
+	err = <-errChan
 	return
 }
 
@@ -877,4 +882,49 @@ func (ca *clusterAdmin) DeleteConsumerGroup(group string) error {
 	}
 
 	return nil
+}
+
+func (ca *clusterAdmin) DescribeLogDirs(brokerIds []int32) (allLogDirs map[int32][]DescribeLogDirsResponseDirMetadata, err error) {
+	allLogDirs = make(map[int32][]DescribeLogDirsResponseDirMetadata)
+
+	// Query brokers in parallel, since we may have to query multiple brokers
+	logDirsMaps := make(chan map[int32][]DescribeLogDirsResponseDirMetadata, len(brokerIds))
+	errChan := make(chan error, len(brokerIds))
+	wg := sync.WaitGroup{}
+
+	for _, b := range brokerIds {
+		wg.Add(1)
+		broker, err := ca.findBroker(b)
+		if err != nil {
+			Logger.Printf("Unable to find broker with ID = %v\n", b)
+			continue
+		}
+		go func(b *Broker, conf *Config) {
+			defer wg.Done()
+			_ = b.Open(conf) // Ensure that broker is opened
+
+			response, err := b.DescribeLogDirs(&DescribeLogDirsRequest{})
+			if err != nil {
+				errChan <- err
+				return
+			}
+			logDirs := make(map[int32][]DescribeLogDirsResponseDirMetadata)
+			logDirs[b.ID()] = response.LogDirs
+			logDirsMaps <- logDirs
+		}(broker, ca.conf)
+	}
+
+	wg.Wait()
+	close(logDirsMaps)
+	close(errChan)
+
+	for logDirsMap := range logDirsMaps {
+		for id, logDirs := range logDirsMap {
+			allLogDirs[id] = logDirs
+		}
+	}
+
+	// Intentionally return only the first error for simplicity
+	err = <-errChan
+	return
 }

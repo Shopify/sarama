@@ -1,6 +1,6 @@
 default: fmt get update test lint
 
-GO       := GO111MODULE=on GOPRIVATE=github.com/linkedin GOSUMDB=off go
+GO       := go
 GOBUILD  := CGO_ENABLED=0 $(GO) build $(BUILD_FLAG)
 GOTEST   := $(GO) test -gcflags='-l' -p 3 -v -race -timeout 6m -coverprofile=profile.out -covermode=atomic
 
@@ -21,7 +21,11 @@ fmt:
 	gofmt -s -l -w $(FILES) $(TESTS)
 
 lint:
-	golangci-lint run
+	GOFLAGS="-tags=functional" golangci-lint run
 
 test:
 	$(GOTEST) ./...
+
+.PHONY: test_functional
+test_functional:
+	$(GOTEST) -tags=functional ./...

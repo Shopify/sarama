@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,7 +36,7 @@ func TestConsumerOffsetManual(t *testing.T) {
 	})
 
 	// When
-	master, err := NewConsumer([]string{broker0.Addr()}, nil)
+	master, err := NewConsumer([]string{broker0.Addr()}, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestConsumerOffsetNewest(t *testing.T) {
 			SetHighWaterMark("my_topic", 0, 14),
 	})
 
-	master, err := NewConsumer([]string{broker0.Addr()}, nil)
+	master, err := NewConsumer([]string{broker0.Addr()}, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func TestConsumerRecreate(t *testing.T) {
 			SetMessage("my_topic", 0, 10, testMsg),
 	})
 
-	c, err := NewConsumer([]string{broker0.Addr()}, nil)
+	c, err := NewConsumer([]string{broker0.Addr()}, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestConsumerDuplicate(t *testing.T) {
 		"FetchRequest": NewMockFetchResponse(t, 1),
 	})
 
-	config := NewConfig()
+	config := NewTestConfig()
 	config.ChannelBufferSize = 0
 	c, err := NewConsumer([]string{broker0.Addr()}, config)
 	if err != nil {
@@ -256,7 +257,7 @@ func runConsumerLeaderRefreshErrorTestWithConfig(t *testing.T, config *Config) {
 // If consumer fails to refresh metadata it keeps retrying with frequency
 // specified by `Config.Consumer.Retry.Backoff`.
 func TestConsumerLeaderRefreshError(t *testing.T) {
-	config := NewConfig()
+	config := NewTestConfig()
 	config.Net.ReadTimeout = 100 * time.Millisecond
 	config.Consumer.Retry.Backoff = 200 * time.Millisecond
 	config.Consumer.Return.Errors = true
@@ -268,7 +269,7 @@ func TestConsumerLeaderRefreshError(t *testing.T) {
 func TestConsumerLeaderRefreshErrorWithBackoffFunc(t *testing.T) {
 	var calls int32 = 0
 
-	config := NewConfig()
+	config := NewTestConfig()
 	config.Net.ReadTimeout = 100 * time.Millisecond
 	config.Consumer.Retry.BackoffFunc = func(retries int) time.Duration {
 		atomic.AddInt32(&calls, 1)
@@ -293,7 +294,7 @@ func TestConsumerInvalidTopic(t *testing.T) {
 			SetBroker(broker0.Addr(), broker0.BrokerID()),
 	})
 
-	c, err := NewConsumer([]string{broker0.Addr()}, nil)
+	c, err := NewConsumer([]string{broker0.Addr()}, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +327,7 @@ func TestConsumerClosePartitionWithoutLeader(t *testing.T) {
 			SetMessage("my_topic", 0, 123, testMsg),
 	})
 
-	config := NewConfig()
+	config := NewTestConfig()
 	config.Net.ReadTimeout = 100 * time.Millisecond
 	config.Consumer.Retry.Backoff = 100 * time.Millisecond
 	config.Consumer.Return.Errors = true
@@ -381,7 +382,7 @@ func TestConsumerShutsDownOutOfRange(t *testing.T) {
 		"FetchRequest": NewMockWrapper(fetchResponse),
 	})
 
-	master, err := NewConsumer([]string{broker0.Addr()}, nil)
+	master, err := NewConsumer([]string{broker0.Addr()}, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +421,7 @@ func TestConsumerExtraOffsets(t *testing.T) {
 	newFetchResponse.SetLastStableOffset("my_topic", 0, 4)
 	for _, fetchResponse1 := range []*FetchResponse{legacyFetchResponse, newFetchResponse} {
 		var offsetResponseVersion int16
-		cfg := NewConfig()
+		cfg := NewTestConfig()
 		cfg.Consumer.Return.Errors = true
 		if fetchResponse1.Version >= 4 {
 			cfg.Version = V0_11_0_0
@@ -486,7 +487,7 @@ func TestConsumerReceivingFetchResponseWithTooOldRecords(t *testing.T) {
 	fetchResponse2 := &FetchResponse{Version: 4}
 	fetchResponse2.AddRecord("my_topic", 0, nil, testMsg, 1000000)
 
-	cfg := NewConfig()
+	cfg := NewTestConfig()
 	cfg.Consumer.Return.Errors = true
 	cfg.Version = V0_11_0_0
 
@@ -532,7 +533,7 @@ func TestConsumeMessageWithNewerFetchAPIVersion(t *testing.T) {
 	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 1)
 	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 2)
 
-	cfg := NewConfig()
+	cfg := NewTestConfig()
 	cfg.Version = V0_11_0_0
 
 	broker0 := NewMockBroker(t, 0)
@@ -575,7 +576,7 @@ func TestConsumeMessageWithSessionIDs(t *testing.T) {
 	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 1)
 	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 2)
 
-	cfg := NewConfig()
+	cfg := NewTestConfig()
 	cfg.Version = V1_1_0_0
 
 	broker0 := NewMockBroker(t, 0)
@@ -618,6 +619,280 @@ func TestConsumeMessageWithSessionIDs(t *testing.T) {
 	}
 }
 
+func TestConsumeMessagesFromReadReplica(t *testing.T) {
+	// Given
+	fetchResponse1 := &FetchResponse{Version: 11}
+	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 1)
+	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 2)
+	block1 := fetchResponse1.GetBlock("my_topic", 0)
+	block1.PreferredReadReplica = -1
+
+	fetchResponse2 := &FetchResponse{Version: 11}
+	// Create a block with no records.
+	block2 := fetchResponse1.getOrCreateBlock("my_topic", 0)
+	block2.PreferredReadReplica = 1
+
+	fetchResponse3 := &FetchResponse{Version: 11}
+	fetchResponse3.AddMessage("my_topic", 0, nil, testMsg, 3)
+	fetchResponse3.AddMessage("my_topic", 0, nil, testMsg, 4)
+	block3 := fetchResponse3.GetBlock("my_topic", 0)
+	block3.PreferredReadReplica = -1
+
+	fetchResponse4 := &FetchResponse{Version: 11}
+	fetchResponse4.AddMessage("my_topic", 0, nil, testMsg, 5)
+	fetchResponse4.AddMessage("my_topic", 0, nil, testMsg, 6)
+	block4 := fetchResponse4.GetBlock("my_topic", 0)
+	block4.PreferredReadReplica = -1
+
+	cfg := NewConfig()
+	cfg.Version = V2_3_0_0
+	cfg.RackID = "consumer_rack"
+
+	leader := NewMockBroker(t, 0)
+	broker0 := NewMockBroker(t, 1)
+
+	leader.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetBroker(leader.Addr(), leader.BrokerID()).
+			SetLeader("my_topic", 0, leader.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetVersion(1).
+			SetOffset("my_topic", 0, OffsetNewest, 1234).
+			SetOffset("my_topic", 0, OffsetOldest, 0),
+		"FetchRequest": NewMockSequence(fetchResponse1, fetchResponse2),
+	})
+
+	broker0.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetBroker(leader.Addr(), leader.BrokerID()).
+			SetLeader("my_topic", 0, leader.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetVersion(1).
+			SetOffset("my_topic", 0, OffsetNewest, 1234).
+			SetOffset("my_topic", 0, OffsetOldest, 0),
+		"FetchRequest": NewMockSequence(fetchResponse3, fetchResponse4),
+	})
+
+	master, err := NewConsumer([]string{broker0.Addr()}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	consumer, err := master.ConsumePartition("my_topic", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertMessageOffset(t, <-consumer.Messages(), 1)
+	assertMessageOffset(t, <-consumer.Messages(), 2)
+	assertMessageOffset(t, <-consumer.Messages(), 3)
+	assertMessageOffset(t, <-consumer.Messages(), 4)
+
+	safeClose(t, consumer)
+	safeClose(t, master)
+	broker0.Close()
+	leader.Close()
+}
+
+func TestConsumeMessagesFromReadReplicaLeaderFallback(t *testing.T) {
+	// Given
+	fetchResponse1 := &FetchResponse{Version: 11}
+	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 1)
+	fetchResponse1.AddMessage("my_topic", 0, nil, testMsg, 2)
+	block1 := fetchResponse1.GetBlock("my_topic", 0)
+	block1.PreferredReadReplica = 5 // Does not exist.
+
+	fetchResponse2 := &FetchResponse{Version: 11}
+	fetchResponse2.AddMessage("my_topic", 0, nil, testMsg, 3)
+	fetchResponse2.AddMessage("my_topic", 0, nil, testMsg, 4)
+	block2 := fetchResponse2.GetBlock("my_topic", 0)
+	block2.PreferredReadReplica = -1
+
+	cfg := NewConfig()
+	cfg.Version = V2_3_0_0
+	cfg.RackID = "consumer_rack"
+
+	leader := NewMockBroker(t, 0)
+
+	leader.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(leader.Addr(), leader.BrokerID()).
+			SetLeader("my_topic", 0, leader.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetVersion(1).
+			SetOffset("my_topic", 0, OffsetNewest, 1234).
+			SetOffset("my_topic", 0, OffsetOldest, 0),
+		"FetchRequest": NewMockSequence(fetchResponse1, fetchResponse2),
+	})
+
+	master, err := NewConsumer([]string{leader.Addr()}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	consumer, err := master.ConsumePartition("my_topic", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertMessageOffset(t, <-consumer.Messages(), 1)
+	assertMessageOffset(t, <-consumer.Messages(), 2)
+	assertMessageOffset(t, <-consumer.Messages(), 3)
+	assertMessageOffset(t, <-consumer.Messages(), 4)
+
+	safeClose(t, consumer)
+	safeClose(t, master)
+	leader.Close()
+}
+
+func TestConsumeMessagesFromReadReplicaErrorReplicaNotAvailable(t *testing.T) {
+	// Given
+	fetchResponse1 := &FetchResponse{Version: 11}
+	block1 := fetchResponse1.getOrCreateBlock("my_topic", 0)
+	block1.PreferredReadReplica = 1
+
+	fetchResponse2 := &FetchResponse{Version: 11}
+	fetchResponse2.AddMessage("my_topic", 0, nil, testMsg, 1)
+	fetchResponse2.AddMessage("my_topic", 0, nil, testMsg, 2)
+	block2 := fetchResponse2.GetBlock("my_topic", 0)
+	block2.PreferredReadReplica = -1
+
+	fetchResponse3 := &FetchResponse{Version: 11}
+	fetchResponse3.AddError("my_topic", 0, ErrReplicaNotAvailable)
+
+	fetchResponse4 := &FetchResponse{Version: 11}
+	fetchResponse4.AddMessage("my_topic", 0, nil, testMsg, 3)
+	fetchResponse4.AddMessage("my_topic", 0, nil, testMsg, 4)
+
+	cfg := NewConfig()
+	cfg.Version = V2_3_0_0
+	cfg.RackID = "consumer_rack"
+
+	leader := NewMockBroker(t, 0)
+	broker0 := NewMockBroker(t, 1)
+
+	leader.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetBroker(leader.Addr(), leader.BrokerID()).
+			SetLeader("my_topic", 0, leader.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetVersion(1).
+			SetOffset("my_topic", 0, OffsetNewest, 1234).
+			SetOffset("my_topic", 0, OffsetOldest, 0),
+		"FetchRequest": NewMockSequence(fetchResponse1, fetchResponse4),
+	})
+
+	broker0.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetBroker(leader.Addr(), leader.BrokerID()).
+			SetLeader("my_topic", 0, leader.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetVersion(1).
+			SetOffset("my_topic", 0, OffsetNewest, 1234).
+			SetOffset("my_topic", 0, OffsetOldest, 0),
+		"FetchRequest": NewMockSequence(fetchResponse2, fetchResponse3),
+	})
+
+	master, err := NewConsumer([]string{broker0.Addr()}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	consumer, err := master.ConsumePartition("my_topic", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertMessageOffset(t, <-consumer.Messages(), 1)
+	assertMessageOffset(t, <-consumer.Messages(), 2)
+	assertMessageOffset(t, <-consumer.Messages(), 3)
+	assertMessageOffset(t, <-consumer.Messages(), 4)
+
+	safeClose(t, consumer)
+	safeClose(t, master)
+	broker0.Close()
+	leader.Close()
+}
+
+func TestConsumeMessagesFromReadReplicaErrorUnknown(t *testing.T) {
+	// Given
+	fetchResponse1 := &FetchResponse{Version: 11}
+	block1 := fetchResponse1.getOrCreateBlock("my_topic", 0)
+	block1.PreferredReadReplica = 1
+
+	fetchResponse2 := &FetchResponse{Version: 11}
+	fetchResponse2.AddMessage("my_topic", 0, nil, testMsg, 1)
+	fetchResponse2.AddMessage("my_topic", 0, nil, testMsg, 2)
+	block2 := fetchResponse2.GetBlock("my_topic", 0)
+	block2.PreferredReadReplica = -1
+
+	fetchResponse3 := &FetchResponse{Version: 11}
+	fetchResponse3.AddError("my_topic", 0, ErrUnknown)
+
+	fetchResponse4 := &FetchResponse{Version: 11}
+	fetchResponse4.AddMessage("my_topic", 0, nil, testMsg, 3)
+	fetchResponse4.AddMessage("my_topic", 0, nil, testMsg, 4)
+
+	cfg := NewConfig()
+	cfg.Version = V2_3_0_0
+	cfg.RackID = "consumer_rack"
+
+	leader := NewMockBroker(t, 0)
+	broker0 := NewMockBroker(t, 1)
+
+	leader.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetBroker(leader.Addr(), leader.BrokerID()).
+			SetLeader("my_topic", 0, leader.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetVersion(1).
+			SetOffset("my_topic", 0, OffsetNewest, 1234).
+			SetOffset("my_topic", 0, OffsetOldest, 0),
+		"FetchRequest": NewMockSequence(fetchResponse1, fetchResponse4),
+	})
+
+	broker0.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetBroker(leader.Addr(), leader.BrokerID()).
+			SetLeader("my_topic", 0, leader.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetVersion(1).
+			SetOffset("my_topic", 0, OffsetNewest, 1234).
+			SetOffset("my_topic", 0, OffsetOldest, 0),
+		"FetchRequest": NewMockSequence(fetchResponse2, fetchResponse3),
+	})
+
+	master, err := NewConsumer([]string{broker0.Addr()}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	consumer, err := master.ConsumePartition("my_topic", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertMessageOffset(t, <-consumer.Messages(), 1)
+	assertMessageOffset(t, <-consumer.Messages(), 2)
+	assertMessageOffset(t, <-consumer.Messages(), 3)
+	assertMessageOffset(t, <-consumer.Messages(), 4)
+
+	safeClose(t, consumer)
+	safeClose(t, master)
+	broker0.Close()
+	leader.Close()
+}
+
 // It is fine if offsets of fetched messages are not sequential (although
 // strictly increasing!).
 func TestConsumerNonSequentialOffsets(t *testing.T) {
@@ -634,7 +909,7 @@ func TestConsumerNonSequentialOffsets(t *testing.T) {
 	newFetchResponse.SetLastStableOffset("my_topic", 0, 11)
 	for _, fetchResponse1 := range []*FetchResponse{legacyFetchResponse, newFetchResponse} {
 		var offsetResponseVersion int16
-		cfg := NewConfig()
+		cfg := NewTestConfig()
 		if fetchResponse1.Version >= 4 {
 			cfg.Version = V0_11_0_0
 			offsetResponseVersion = 1
@@ -709,7 +984,7 @@ func TestConsumerRebalancingMultiplePartitions(t *testing.T) {
 	})
 
 	// launch test goroutines
-	config := NewConfig()
+	config := NewTestConfig()
 	config.Consumer.Retry.Backoff = 50
 	master, err := NewConsumer([]string{seedBroker.Addr()}, config)
 	if err != nil {
@@ -868,7 +1143,7 @@ func TestConsumerInterleavedClose(t *testing.T) {
 			SetMessage("my_topic", 1, 2000, testMsg),
 	})
 
-	config := NewConfig()
+	config := NewTestConfig()
 	config.ChannelBufferSize = 0
 	master, err := NewConsumer([]string{broker0.Addr()}, config)
 	if err != nil {
@@ -929,7 +1204,7 @@ func TestConsumerBounceWithReferenceOpen(t *testing.T) {
 		"FetchRequest":    mockFetchResponse,
 	})
 
-	config := NewConfig()
+	config := NewTestConfig()
 	config.Consumer.Return.Errors = true
 	config.Consumer.Retry.Backoff = 100 * time.Millisecond
 	config.ChannelBufferSize = 1
@@ -1006,7 +1281,7 @@ func TestConsumerOffsetOutOfRange(t *testing.T) {
 			SetOffset("my_topic", 0, OffsetOldest, 2345),
 	})
 
-	master, err := NewConsumer([]string{broker0.Addr()}, nil)
+	master, err := NewConsumer([]string{broker0.Addr()}, NewTestConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1043,7 +1318,7 @@ func TestConsumerExpiryTicker(t *testing.T) {
 		"FetchRequest": NewMockSequence(fetchResponse1),
 	})
 
-	config := NewConfig()
+	config := NewTestConfig()
 	config.ChannelBufferSize = 0
 	config.Consumer.MaxProcessingTime = 10 * time.Millisecond
 	master, err := NewConsumer([]string{broker0.Addr()}, config)
@@ -1112,7 +1387,7 @@ func TestConsumerTimestamps(t *testing.T) {
 	} {
 		var fr *FetchResponse
 		var offsetResponseVersion int16
-		cfg := NewConfig()
+		cfg := NewTestConfig()
 		cfg.Version = d.kversion
 		switch {
 		case d.kversion.IsAtLeast(V0_11_0_0):
@@ -1212,7 +1487,7 @@ func TestExcludeUncommitted(t *testing.T) {
 		"FetchRequest": NewMockWrapper(fetchResponse),
 	})
 
-	cfg := NewConfig()
+	cfg := NewTestConfig()
 	cfg.Consumer.Return.Errors = true
 	cfg.Version = V0_11_0_0
 	cfg.Consumer.IsolationLevel = ReadCommitted
@@ -1256,7 +1531,7 @@ func assertMessageOffset(t *testing.T, msg *ConsumerMessage, expectedOffset int6
 // This example shows how to use the consumer to read messages
 // from a single partition.
 func ExampleConsumer() {
-	consumer, err := NewConsumer([]string{"localhost:9092"}, nil)
+	consumer, err := NewConsumer([]string{"localhost:9092"}, NewTestConfig())
 	if err != nil {
 		panic(err)
 	}
@@ -1340,5 +1615,114 @@ func Test_partitionConsumer_parseResponse(t *testing.T) {
 				t.Errorf("partitionConsumer.parseResponse() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func testConsumerInterceptor(
+	t *testing.T,
+	interceptors []ConsumerInterceptor,
+	expectationFn func(*testing.T, int, *ConsumerMessage),
+) {
+	// Given
+	broker0 := NewMockBroker(t, 0)
+
+	mockFetchResponse := NewMockFetchResponse(t, 1)
+	for i := 0; i < 10; i++ {
+		mockFetchResponse.SetMessage("my_topic", 0, int64(i), testMsg)
+	}
+
+	broker0.SetHandlerByMap(map[string]MockResponse{
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetBroker(broker0.Addr(), broker0.BrokerID()).
+			SetLeader("my_topic", 0, broker0.BrokerID()),
+		"OffsetRequest": NewMockOffsetResponse(t).
+			SetOffset("my_topic", 0, OffsetOldest, 0).
+			SetOffset("my_topic", 0, OffsetNewest, 0),
+		"FetchRequest": mockFetchResponse,
+	})
+	config := NewTestConfig()
+	config.Consumer.Interceptors = interceptors
+	// When
+	master, err := NewConsumer([]string{broker0.Addr()}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consumer, err := master.ConsumePartition("my_topic", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 10; i++ {
+		select {
+		case msg := <-consumer.Messages():
+			expectationFn(t, i, msg)
+		case err := <-consumer.Errors():
+			t.Error(err)
+		}
+	}
+
+	safeClose(t, consumer)
+	safeClose(t, master)
+	broker0.Close()
+}
+
+func TestConsumerInterceptors(t *testing.T) {
+	tests := []struct {
+		name          string
+		interceptors  []ConsumerInterceptor
+		expectationFn func(*testing.T, int, *ConsumerMessage)
+	}{
+		{
+			name:         "intercept messages",
+			interceptors: []ConsumerInterceptor{&appendInterceptor{i: 0}},
+			expectationFn: func(t *testing.T, i int, msg *ConsumerMessage) {
+				ev, _ := testMsg.Encode()
+				expected := string(ev) + strconv.Itoa(i)
+				v := string(msg.Value)
+				if v != expected {
+					t.Errorf("Interceptor should have incremented the value, got %s, expected %s", v, expected)
+				}
+			},
+		},
+		{
+			name:         "interceptor chain",
+			interceptors: []ConsumerInterceptor{&appendInterceptor{i: 0}, &appendInterceptor{i: 1000}},
+			expectationFn: func(t *testing.T, i int, msg *ConsumerMessage) {
+				ev, _ := testMsg.Encode()
+				expected := string(ev) + strconv.Itoa(i) + strconv.Itoa(i+1000)
+				v := string(msg.Value)
+				if v != expected {
+					t.Errorf("Interceptor should have incremented the value, got %s, expected %s", v, expected)
+				}
+			},
+		},
+		{
+			name:         "interceptor chain with one interceptor failing",
+			interceptors: []ConsumerInterceptor{&appendInterceptor{i: -1}, &appendInterceptor{i: 1000}},
+			expectationFn: func(t *testing.T, i int, msg *ConsumerMessage) {
+				ev, _ := testMsg.Encode()
+				expected := string(ev) + strconv.Itoa(i+1000)
+				v := string(msg.Value)
+				if v != expected {
+					t.Errorf("Interceptor should have not changed the value, got %s, expected %s", v, expected)
+				}
+			},
+		},
+		{
+			name:         "interceptor chain with all interceptors failing",
+			interceptors: []ConsumerInterceptor{&appendInterceptor{i: -1}, &appendInterceptor{i: -1}},
+			expectationFn: func(t *testing.T, i int, msg *ConsumerMessage) {
+				ev, _ := testMsg.Encode()
+				expected := string(ev)
+				v := string(msg.Value)
+				if v != expected {
+					t.Errorf("Interceptor should have incremented the value, got %s, expected %s", v, expected)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { testConsumerInterceptor(t, tt.interceptors, tt.expectationFn) })
 	}
 }

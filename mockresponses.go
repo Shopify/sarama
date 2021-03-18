@@ -177,8 +177,8 @@ func (mmr *MockMetadataResponse) For(reqBody versionedDecoder) encoderWithHeader
 	}
 
 	// Generate set of replicas
-	replicas := []int32{}
-	offlineReplicas := []int32{}
+	var replicas []int32
+	var offlineReplicas []int32
 	for _, brokerID := range mmr.brokers {
 		replicas = append(replicas, brokerID)
 	}
@@ -772,8 +772,8 @@ func (mr *MockDescribeConfigsResponse) For(reqBody versionedDecoder) encoderWith
 		Version: req.Version,
 	}
 
-	includeSynonyms := (req.Version > 0)
-	includeSource := (req.Version > 0)
+	includeSynonyms := req.Version > 0
+	includeSource := req.Version > 0
 
 	for _, r := range req.Resources {
 		var configEntries []*ConfigEntry
@@ -853,6 +853,31 @@ func (mr *MockDescribeConfigsResponse) For(reqBody versionedDecoder) encoderWith
 	return res
 }
 
+type MockDescribeConfigsResponseWithErrorCode struct {
+	t TestReporter
+}
+
+func NewMockDescribeConfigsResponseWithErrorCode(t TestReporter) *MockDescribeConfigsResponseWithErrorCode {
+	return &MockDescribeConfigsResponseWithErrorCode{t: t}
+}
+
+func (mr *MockDescribeConfigsResponseWithErrorCode) For(reqBody versionedDecoder) encoderWithHeader {
+	req := reqBody.(*DescribeConfigsRequest)
+	res := &DescribeConfigsResponse{
+		Version: req.Version,
+	}
+
+	for _, r := range req.Resources {
+		res.Resources = append(res.Resources, &ResourceResponse{
+			Name:      r.Name,
+			Type:      r.Type,
+			ErrorCode: 83,
+			ErrorMsg:  "",
+		})
+	}
+	return res
+}
+
 type MockAlterConfigsResponse struct {
 	t TestReporter
 }
@@ -869,6 +894,29 @@ func (mr *MockAlterConfigsResponse) For(reqBody versionedDecoder) encoderWithHea
 		res.Resources = append(res.Resources, &AlterConfigsResourceResponse{Name: r.Name,
 			Type:     r.Type,
 			ErrorMsg: "",
+		})
+	}
+	return res
+}
+
+type MockAlterConfigsResponseWithErrorCode struct {
+	t TestReporter
+}
+
+func NewMockAlterConfigsResponseWithErrorCode(t TestReporter) *MockAlterConfigsResponseWithErrorCode {
+	return &MockAlterConfigsResponseWithErrorCode{t: t}
+}
+
+func (mr *MockAlterConfigsResponseWithErrorCode) For(reqBody versionedDecoder) encoderWithHeader {
+	req := reqBody.(*AlterConfigsRequest)
+	res := &AlterConfigsResponse{}
+
+	for _, r := range req.Resources {
+		res.Resources = append(res.Resources, &AlterConfigsResourceResponse{
+			Name:      r.Name,
+			Type:      r.Type,
+			ErrorCode: 83,
+			ErrorMsg:  "",
 		})
 	}
 	return res
@@ -1026,6 +1074,196 @@ func (m *MockDeleteGroupsResponse) For(reqBody versionedDecoder) encoderWithHead
 	}
 	for _, group := range m.deletedGroups {
 		resp.GroupErrorCodes[group] = ErrNoError
+	}
+	return resp
+}
+
+type MockJoinGroupResponse struct {
+	t TestReporter
+
+	ThrottleTime  int32
+	Err           KError
+	GenerationId  int32
+	GroupProtocol string
+	LeaderId      string
+	MemberId      string
+	Members       map[string][]byte
+}
+
+func NewMockJoinGroupResponse(t TestReporter) *MockJoinGroupResponse {
+	return &MockJoinGroupResponse{
+		t:       t,
+		Members: make(map[string][]byte),
+	}
+}
+
+func (m *MockJoinGroupResponse) For(reqBody versionedDecoder) encoderWithHeader {
+	req := reqBody.(*JoinGroupRequest)
+	resp := &JoinGroupResponse{
+		Version:       req.Version,
+		ThrottleTime:  m.ThrottleTime,
+		Err:           m.Err,
+		GenerationId:  m.GenerationId,
+		GroupProtocol: m.GroupProtocol,
+		LeaderId:      m.LeaderId,
+		MemberId:      m.MemberId,
+		Members:       m.Members,
+	}
+	return resp
+}
+
+func (m *MockJoinGroupResponse) SetThrottleTime(t int32) *MockJoinGroupResponse {
+	m.ThrottleTime = t
+	return m
+}
+
+func (m *MockJoinGroupResponse) SetError(kerr KError) *MockJoinGroupResponse {
+	m.Err = kerr
+	return m
+}
+
+func (m *MockJoinGroupResponse) SetGenerationId(id int32) *MockJoinGroupResponse {
+	m.GenerationId = id
+	return m
+}
+
+func (m *MockJoinGroupResponse) SetGroupProtocol(proto string) *MockJoinGroupResponse {
+	m.GroupProtocol = proto
+	return m
+}
+
+func (m *MockJoinGroupResponse) SetLeaderId(id string) *MockJoinGroupResponse {
+	m.LeaderId = id
+	return m
+}
+
+func (m *MockJoinGroupResponse) SetMemberId(id string) *MockJoinGroupResponse {
+	m.MemberId = id
+	return m
+}
+
+func (m *MockJoinGroupResponse) SetMember(id string, meta *ConsumerGroupMemberMetadata) *MockJoinGroupResponse {
+	bin, err := encode(meta, nil)
+	if err != nil {
+		panic(fmt.Sprintf("error encoding member metadata: %v", err))
+	}
+	m.Members[id] = bin
+	return m
+}
+
+type MockLeaveGroupResponse struct {
+	t TestReporter
+
+	Err KError
+}
+
+func NewMockLeaveGroupResponse(t TestReporter) *MockLeaveGroupResponse {
+	return &MockLeaveGroupResponse{t: t}
+}
+
+func (m *MockLeaveGroupResponse) For(reqBody versionedDecoder) encoderWithHeader {
+	resp := &LeaveGroupResponse{
+		Err: m.Err,
+	}
+	return resp
+}
+
+func (m *MockLeaveGroupResponse) SetError(kerr KError) *MockLeaveGroupResponse {
+	m.Err = kerr
+	return m
+}
+
+type MockSyncGroupResponse struct {
+	t TestReporter
+
+	Err              KError
+	MemberAssignment []byte
+}
+
+func NewMockSyncGroupResponse(t TestReporter) *MockSyncGroupResponse {
+	return &MockSyncGroupResponse{t: t}
+}
+
+func (m *MockSyncGroupResponse) For(reqBody versionedDecoder) encoderWithHeader {
+	resp := &SyncGroupResponse{
+		Err:              m.Err,
+		MemberAssignment: m.MemberAssignment,
+	}
+	return resp
+}
+
+func (m *MockSyncGroupResponse) SetError(kerr KError) *MockSyncGroupResponse {
+	m.Err = kerr
+	return m
+}
+
+func (m *MockSyncGroupResponse) SetMemberAssignment(assignment *ConsumerGroupMemberAssignment) *MockSyncGroupResponse {
+	bin, err := encode(assignment, nil)
+	if err != nil {
+		panic(fmt.Sprintf("error encoding member assignment: %v", err))
+	}
+	m.MemberAssignment = bin
+	return m
+}
+
+type MockHeartbeatResponse struct {
+	t TestReporter
+
+	Err KError
+}
+
+func NewMockHeartbeatResponse(t TestReporter) *MockHeartbeatResponse {
+	return &MockHeartbeatResponse{t: t}
+}
+
+func (m *MockHeartbeatResponse) For(reqBody versionedDecoder) encoderWithHeader {
+	resp := &HeartbeatResponse{}
+	return resp
+}
+
+func (m *MockHeartbeatResponse) SetError(kerr KError) *MockHeartbeatResponse {
+	m.Err = kerr
+	return m
+}
+
+type MockDescribeLogDirsResponse struct {
+	t       TestReporter
+	logDirs []DescribeLogDirsResponseDirMetadata
+}
+
+func NewMockDescribeLogDirsResponse(t TestReporter) *MockDescribeLogDirsResponse {
+	return &MockDescribeLogDirsResponse{t: t}
+}
+
+func (m *MockDescribeLogDirsResponse) SetLogDirs(logDirPath string, topicPartitions map[string]int) *MockDescribeLogDirsResponse {
+	var topics []DescribeLogDirsResponseTopic
+	for topic := range topicPartitions {
+		var partitions []DescribeLogDirsResponsePartition
+		for i := 0; i < topicPartitions[topic]; i++ {
+			partitions = append(partitions, DescribeLogDirsResponsePartition{
+				PartitionID: int32(i),
+				IsTemporary: false,
+				OffsetLag:   int64(0),
+				Size:        int64(1234),
+			})
+		}
+		topics = append(topics, DescribeLogDirsResponseTopic{
+			Topic:      topic,
+			Partitions: partitions,
+		})
+	}
+	logDir := DescribeLogDirsResponseDirMetadata{
+		ErrorCode: ErrNoError,
+		Path:      logDirPath,
+		Topics:    topics,
+	}
+	m.logDirs = []DescribeLogDirsResponseDirMetadata{logDir}
+	return m
+}
+
+func (m *MockDescribeLogDirsResponse) For(reqBody versionedDecoder) encoderWithHeader {
+	resp := &DescribeLogDirsResponse{
+		LogDirs: m.logDirs,
 	}
 	return resp
 }
