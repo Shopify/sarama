@@ -780,6 +780,43 @@ func TestClientMetadataTimeout(t *testing.T) {
 	}
 }
 
+func TestClientUpdateMetadataErrorAndRetry(t *testing.T) {
+	seedBroker := NewMockBroker(t, 1)
+
+	metadataResponse1 := new(MetadataResponse)
+	metadataResponse1.AddBroker(seedBroker.Addr(), 1)
+	seedBroker.Returns(metadataResponse1)
+
+	config := NewTestConfig()
+	config.Metadata.Retry.Max = 3
+	config.Metadata.Retry.Backoff = 0
+	config.Metadata.Retry.Backoff = 200 * time.Millisecond
+	config.Metadata.RefreshFrequency = 0
+	client, err := NewClient([]string{seedBroker.Addr()}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitGourp := sync.WaitGroup{}
+	waitGourp.Add(2)
+	for i:= 0; i < 2; i++ {
+		go func() {
+			metadataResponse1.AddTopic("new_topic", ErrUnknownTopicOrPartition)
+			seedBroker.Returns(metadataResponse1)
+			seedBroker.Returns(metadataResponse1)
+			seedBroker.Returns(metadataResponse1)
+			seedBroker.Returns(metadataResponse1)
+			err = client.RefreshMetadata()
+			if err == nil {
+				t.Fatal("should get error update metadata")
+			}
+			waitGourp.Done()
+		}()
+	}
+	waitGourp.Wait()
+	safeClose(t, client)
+	seedBroker.Close()
+}
+
 func TestClientCoordinatorWithConsumerOffsetsTopic(t *testing.T) {
 	seedBroker := NewMockBroker(t, 1)
 	staleCoordinator := NewMockBroker(t, 2)
