@@ -5,24 +5,17 @@ package sarama
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	toxiproxy "github.com/Shopify/toxiproxy/client"
-)
-
-const (
-	uncomittedMsgJar = "https://github.com/FrancoisPoinsot/simplest-uncommitted-msg/releases/download/0.1/simplest-uncommitted-msg-0.1-jar-with-dependencies.jar"
 )
 
 var (
@@ -340,40 +333,79 @@ func prepareTestTopics(ctx context.Context, env *testEnvironment) error {
 		}
 	}
 
-	// This is kind of gross, but we don't actually have support for doing transactional publishing
-	// with sarama, so we need to use a java-based tool to publish uncomitted messages to
-	// the uncommitted-topic-test-4 topic
-	jarName := filepath.Base(uncomittedMsgJar)
-	if _, err := os.Stat(jarName); err != nil {
-		Logger.Printf("Downloading %s\n", uncomittedMsgJar)
-		req, err := http.NewRequest("GET", uncomittedMsgJar, nil)
-		if err != nil {
-			return fmt.Errorf("failed creating requst for uncomitted msg jar: %w", err)
-		}
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed fetching the uncommitted msg jar: %w", err)
-		}
-		defer res.Body.Close()
-		jarFile, err := os.OpenFile(jarName, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o644)
-		if err != nil {
-			return fmt.Errorf("failed opening the uncomitted msg jar: %w", err)
-		}
-		defer jarFile.Close()
+	transactionalID := "transactional.id config"
 
-		_, err = io.Copy(jarFile, res.Body)
-		if err != nil {
-			return fmt.Errorf("failed writing the uncomitted msg jar: %w", err)
+	var coordinator *Broker
+
+	// wait until transactional topic is available and then connect to the
+	// coordinator broker
+	for coordinator == nil {
+		if _, err := client.Leader("__transaction_state", 0); err != nil {
+			time.Sleep(2 * time.Second)
+			_ = client.RefreshMetadata("__transaction_state")
+			continue
 		}
+		coordRes, err := controller.FindCoordinator(&FindCoordinatorRequest{
+			Version:         2,
+			CoordinatorKey:  transactionalID,
+			CoordinatorType: CoordinatorTransaction,
+		})
+		if err != nil {
+			return err
+		}
+		if coordRes.Err != ErrNoError {
+			continue
+		}
+		if err := coordRes.Coordinator.Open(client.Config()); err != nil {
+			return err
+		}
+		coordinator = coordRes.Coordinator
+		break
 	}
 
-	c := exec.Command("java", "-jar", jarName, "-b", env.KafkaBrokerAddrs[0], "-c", "4")
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	err = c.Run()
+	pidRes, err := coordinator.InitProducerID(&InitProducerIDRequest{
+		TransactionalID:    &transactionalID,
+		TransactionTimeout: 10 * time.Second,
+	})
 	if err != nil {
-		return fmt.Errorf("failed running uncomitted msg jar: %w", err)
+		return err
 	}
+
+	_, _ = coordinator.AddPartitionsToTxn(&AddPartitionsToTxnRequest{
+		TransactionalID: transactionalID,
+		ProducerID:      pidRes.ProducerID,
+		ProducerEpoch:   pidRes.ProducerEpoch,
+		TopicPartitions: map[string][]int32{
+			"uncomitted-topic-test-4": {0},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	ps := &produceSet{
+		msgs: make(map[string]map[int32]*partitionSet),
+		parent: &asyncProducer{
+			conf: config,
+		},
+		producerID:    pidRes.ProducerID,
+		producerEpoch: pidRes.ProducerEpoch,
+	}
+	_ = ps.add(&ProducerMessage{
+		Topic:     "uncomitted-topic-test-4",
+		Partition: 0,
+		Value:     StringEncoder("uncomimtted message"),
+	})
+	produceReq := ps.buildRequest()
+	produceReq.TransactionalID = &transactionalID
+	_, _ = coordinator.Produce(produceReq)
+	_, _ = coordinator.EndTxn(&EndTxnRequest{
+		TransactionalID:   transactionalID,
+		ProducerID:        pidRes.ProducerID,
+		ProducerEpoch:     pidRes.ProducerEpoch,
+		TransactionResult: false,
+	})
+
 	return nil
 }
 
